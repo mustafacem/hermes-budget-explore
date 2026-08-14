@@ -1,3 +1,24 @@
+> ### ⚠️ This is a fork, not the official Hermes Agent
+>
+> A **modification of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)** (MIT, © 2025 Nous Research),
+> forked at [`e9579a989`](https://github.com/NousResearch/hermes-agent/commit/e9579a989). Not affiliated with or endorsed by Nous Research.
+> Everything below this notice is upstream documentation.
+>
+> **This fork adds five opt-in features** — read-only exploring subagents, a session
+> spend ceiling, per-tool cost attribution, a stuck-loop detector, and pins that
+> survive compaction — in **3,116 new lines across 23 files**, with **169 new tests**
+> and **zero new failures**. Core changes total **two lines**.
+>
+> Measured: **52–75% context saving** on multi-turn exploration, and a **19x** cost
+> error that per-tool attribution makes visible. Hybrid local+API operation proven
+> end to end with a real API parent and a real local child.
+>
+> **→ [`FORK.md`](FORK.md)** for what was added and how much it improves things.
+> **→ [`HANDOFF.md`](HANDOFF.md)** for the full engineering writeup.
+>
+> For the original, unmodified project, go to
+> **[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)**.
+
 <p align="center">
   <img src="assets/banner.png" alt="Hermes Agent" width="100%">
 </p>

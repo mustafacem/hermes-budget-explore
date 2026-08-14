@@ -226,7 +226,42 @@ TOOLSETS = {
         "tools": ["read_file", "write_file", "patch", "search_files"],
         "includes": []
     },
-    
+
+    # Declared statically so `-t pinboard` validates. The tool itself is
+    # supplied by the bundled `pinboard` plugin; when that plugin is not
+    # enabled the toolset simply resolves to nothing. Without a static entry
+    # the CLI validates toolset names *before* plugins register theirs, so the
+    # toolset is rejected as unknown and silently dropped.
+    "pinboard": {
+        "description": (
+            "Pin findings that survive context compaction (requires the "
+            "bundled `pinboard` plugin)"
+        ),
+        "tools": ["pin"],
+        "includes": []
+    },
+
+    # Investigation without mutation. Every tool here is idempotent and leaves
+    # no trace: no writes, no shell, no scheduling, no messages. That property
+    # is what makes it safe to hand to a cheaper/local model for the
+    # exploration phase of a task (see delegate_task mode="explore"), where
+    # most of an agent's steps and context tokens are spent but almost none of
+    # its judgement is. `skill_manage` is deliberately absent -- it installs.
+    "exploration": {
+        "description": (
+            "Read-only investigation: read files, search the codebase, and "
+            "fetch web content. No writes, no shell, no side effects of any kind."
+        ),
+        "tools": [
+            "read_file", "search_files",
+            "web_search", "web_extract",
+            "skills_list", "skill_view",
+            "vision_analyze",
+        ],
+        "includes": []
+    },
+
+
     "tts": {
         "description": "Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI",
         "tools": ["text_to_speech"],

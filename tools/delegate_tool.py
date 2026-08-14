@@ -58,6 +58,85 @@ DELEGATE_BLOCKED_TOOLS = frozenset(
 
 
 # ---------------------------------------------------------------------------
+# Exploration mode
+# ---------------------------------------------------------------------------
+# mode="explore" narrows a child to side-effect-free tools. This is the one
+# capability knob the model is allowed to touch, and it is safe precisely
+# because it can only ever REMOVE tools: the requested toolset is intersected
+# with the parent's in _build_child_agent, so a child can never gain anything
+# the parent lacks. The motivation is cost, not safety -- exploration is where
+# an agent spends most of its steps and nearly all of its context tokens
+# (reading files, grepping, fetching pages) while needing the least judgement
+# per step, so it is the phase worth handing to a cheaper or local model.
+#
+# The narrowing is enforced twice, deliberately. Passing the toolset name is
+# the primary path; _EXPLORE_DENY_TOOLSETS is defence in depth, so that a
+# mixed platform bundle (hermes-cli and friends, which carry terminal and
+# write_file alongside useful tools) cannot reintroduce a mutating tool if
+# toolset resolution changes underneath us.
+EXPLORE_TOOLSET = "exploration"
+
+
+# Default output contract for mode="explore".
+#
+# The cost saving from an exploring child comes from its context being separate
+# and then discarded: the parent pays for the summary, not for the twenty files
+# the child opened. That saving evaporates if the child answers with a narrative
+# of everything it did, so an explore child is given a shape to fill in unless
+# the caller supplies its own.
+#
+# `evidence` is deliberately separate from `findings`: a distilled claim the
+# parent cannot locate is worse than no claim, because it cannot be checked
+# without redoing the exploration that was just paid for.
+EXPLORE_OUTPUT_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "description": (
+                "What you concluded. Conclusions, not narration — the reader "
+                "did not watch you work and does not want a transcript."
+            ),
+            "items": {"type": "string"},
+        },
+        "evidence": {
+            "type": "array",
+            "description": (
+                "file:line (or URL) for each finding, in the same order. A "
+                "claim the reader cannot locate cannot be checked."
+            ),
+            "items": {"type": "string"},
+        },
+        "open_questions": {
+            "type": "array",
+            "description": "What you could not determine, and why.",
+            "items": {"type": "string"},
+        },
+        "examined": {
+            "type": "array",
+            "description": "Files or sources you looked at but found nothing in.",
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["findings"],
+}
+
+
+
+# Only toolsets whose tools are ALL mutating may go here. Disabling a toolset
+# subtracts its tool names after composite expansion, so a bundle that mixes
+# read and write tools would take the read ones down with it -- `browser`, for
+# instance, carries `web_search` alongside its navigation tools, and denying it
+# would silently strip search from an exploring child.
+_EXPLORE_DENY_TOOLSETS = (
+    "terminal",  # terminal + process
+    "code_execution",
+    "computer_use",
+    "tts",
+)
+
+
+# ---------------------------------------------------------------------------
 # Subagent approval callbacks
 # ---------------------------------------------------------------------------
 # Subagents run inside a ThreadPoolExecutor worker. The CLI's interactive
@@ -582,6 +661,24 @@ def _normalize_role(r: Optional[str]) -> str:
         return r_norm
     logger.warning("Unknown delegate_task role=%r, coercing to 'leaf'", r)
     return "leaf"
+
+
+def _normalize_mode(m: Optional[str]) -> str:
+    """Normalise a caller-provided mode to 'default' or 'explore'.
+
+    Mirrors _normalize_role's silent-degrade pattern: unknown values fall back
+    to the unrestricted default rather than erroring, because a mistyped mode
+    should not fail a delegation. Degrading toward 'default' is the widening
+    direction, but that is still bounded -- the child can never exceed the
+    parent's own toolsets.
+    """
+    if m is None or not m:
+        return "default"
+    m_norm = str(m).strip().lower()
+    if m_norm in {"default", "explore"}:
+        return m_norm
+    logger.warning("Unknown delegate_task mode=%r, coercing to 'default'", m)
+    return "default"
 
 
 def _get_max_concurrent_children() -> int:
@@ -1325,6 +1422,9 @@ def _build_child_agent(
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
     role: str = "leaf",
+    # 'explore' narrows the child to side-effect-free tools. Narrowing only —
+    # the toolset is still intersected with the parent's below.
+    mode: str = "default",
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1379,13 +1479,24 @@ def _build_child_agent(
     else:
         parent_toolsets = set(DEFAULT_TOOLSETS)
 
+    # mode="explore" requests the read-only toolset. It goes through the same
+    # intersection path as any other request below, so the narrowing cannot
+    # become a widening: if the parent lacks these tools, the child gets less
+    # still, never more.
+    explore_mode = str(mode or "default").strip().lower() == "explore"
+    if explore_mode:
+        toolsets = [EXPLORE_TOOLSET]
+
     if toolsets:
         # Intersect with parent — subagent must not gain tools the parent lacks.
         # Expand composite toolsets (e.g. hermes-cli) so that individual
         # toolset names (e.g. web, terminal) are recognised during intersection.
         expanded_parent = _expand_parent_toolsets(parent_toolsets)
         child_toolsets = [t for t in toolsets if t in expanded_parent]
-        if _get_inherit_mcp_toolsets():
+        # MCP servers expose arbitrary tools whose side effects we cannot
+        # inspect, so an explore child does not inherit them. Preserving them
+        # would defeat the point of the mode.
+        if _get_inherit_mcp_toolsets() and not explore_mode:
             child_toolsets = _preserve_parent_mcp_toolsets(
                 child_toolsets, parent_toolsets
             )
@@ -1415,7 +1526,14 @@ def _build_child_agent(
         ]
     child_disabled_toolsets = list(
         dict.fromkeys(
-            inherited_disabled + _blocked_toolsets_for_role(effective_role) + ["kanban"]
+            inherited_disabled
+            + _blocked_toolsets_for_role(effective_role)
+            + ["kanban"]
+            # Second line of defence for explore mode. The toolset request
+            # above is the primary mechanism; this ensures a mutating tool
+            # cannot arrive via a mixed platform bundle that survives
+            # intersection because it also carries read tools.
+            + (list(_EXPLORE_DENY_TOOLSETS) if explore_mode else [])
         )
     )
 
@@ -3135,6 +3253,7 @@ def delegate_task(
     tasks: Optional[List[Dict[str, Any]]] = None,
     max_iterations: Optional[int] = None,
     role: Optional[str] = None,
+    mode: Optional[str] = None,
     background: Optional[bool] = None,
     output_schema: Optional[Dict[str, Any]] = None,
     parent_agent=None,
@@ -3150,6 +3269,12 @@ def delegate_task(
     'leaf' (default) cannot; 'orchestrator' retains the delegation
     toolset and can spawn its own workers, bounded by
     delegation.max_spawn_depth.  Per-task role beats the top-level one.
+
+    The 'mode' parameter controls capability: 'default' inherits the parent's
+    toolsets; 'explore' narrows the child to read-only tools (read_file,
+    search_files, web_search, web_extract, ...). Narrowing only -- the result
+    is still intersected with the parent, so a child can never gain a tool the
+    parent lacks.  Per-task mode beats the top-level one.
 
     Returns JSON with results array, one entry per task.
     """
@@ -3167,6 +3292,7 @@ def delegate_task(
 
     # Normalise the top-level role once; per-task overrides re-normalise.
     top_role = _normalize_role(role)
+    top_mode = _normalize_mode(mode)
 
     # Background (async) delegation now applies to BOTH single tasks and
     # batches. A batch is dispatched as ONE async unit: the whole fan-out runs
@@ -3276,6 +3402,11 @@ def delegate_task(
         raw_schema = task.get("output_schema")
         if raw_schema is None and len(task_list) == 1 and output_schema is not None:
             raw_schema = output_schema
+        # An explore child with no contract of its own gets the distillation
+        # shape. An explicit schema always wins -- this is a default, not a
+        # policy.
+        if raw_schema is None and _normalize_mode(task.get("mode") or mode) == "explore":
+            raw_schema = EXPLORE_OUTPUT_SCHEMA
         coerced_schema, schema_err = coerce_output_schema(raw_schema)
         if schema_err:
             return tool_error(f"Task {i} output_schema invalid: {schema_err}")
@@ -3334,6 +3465,7 @@ def delegate_task(
         # Per-task role beats top-level; normalise again so unknown
         # per-task values warn and degrade to leaf uniformly.
         effective_role = _normalize_role(t.get("role") or top_role)
+        effective_mode = _normalize_mode(t.get("mode") or top_mode)
         # T1-24: schema'd tasks get the contract appended to their context
         # so the child knows the expected output shape before it starts.
         _task_schema = task_schemas[i] if i < len(task_schemas) else None
@@ -3362,6 +3494,7 @@ def delegate_task(
             override_acp_command=creds.get("command"),
             override_acp_args=creds.get("args"),
             role=effective_role,
+            mode=effective_mode,
         )
         # Attach the validated schema for the completion-side validation
         # hook in _run_single_child. Absent (None) on schema-less tasks.
@@ -4241,6 +4374,11 @@ DELEGATE_TASK_SCHEMA = {
                             "enum": ["leaf", "orchestrator"],
                             "description": "Per-task role override. See top-level 'role' for semantics.",
                         },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["default", "explore"],
+                            "description": "Per-task mode override. See top-level 'mode' for semantics.",
+                        },
                         "output_schema": {
                             "type": "object",
                             "description": (
@@ -4266,6 +4404,11 @@ DELEGATE_TASK_SCHEMA = {
                 "type": "string",
                 "enum": ["leaf", "orchestrator"],
                 "description": "(rebuilt at get_definitions() time)",
+            },
+            "mode": {
+                "type": "string",
+                "enum": ["default", "explore"],
+                "description": "Capability mode. 'default' (omit) gives the subagent the same toolsets you have. 'explore' restricts it to read-only tools -- read_file, search_files, web_search, web_extract -- so it cannot write, run commands, or cause any side effect. Use 'explore' for investigation (reading code, gathering facts, surveying options): it is the phase that burns the most steps and context for the least judgement, so it is the cheapest to hand off. Do the deciding and the editing yourself. The child explores in its own context, which is then discarded — you pay for its distilled findings, not for the twenty files it opened. It returns findings + file:line evidence unless you supply your own output_schema.",
             },
             "output_schema": {
                 "type": "object",

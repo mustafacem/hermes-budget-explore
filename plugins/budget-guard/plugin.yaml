@@ -1,0 +1,10 @@
+name: budget-guard
+version: 1.0.0
+description: "Hard spend ceiling per session. Tracks real token cost from provider usage, warns the agent as it approaches the limit, stops fan-out, then stops tool use entirely — so a runaway agent lands instead of crashing."
+author: NousResearch
+hooks:
+  - post_api_request
+  - pre_llm_call
+  - pre_tool_call
+  - on_session_start
+  - on_session_end

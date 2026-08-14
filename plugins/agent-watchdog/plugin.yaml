@@ -1,0 +1,8 @@
+name: agent-watchdog
+version: 1.0.0
+description: "Notices when an agent stops making progress — the same call repeating with the same result, an A-B-A-B loop, or a long run of calls turning up nothing new — and interrupts once with actionable advice instead of letting it burn budget."
+author: NousResearch
+hooks:
+  - pre_tool_call
+  - post_tool_call
+  - on_session_start

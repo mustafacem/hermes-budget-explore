@@ -174,6 +174,44 @@ Note that the pin is global: `delegate_task` has no per-task model parameter, so
 
 `delegate_task` does not accept a model-facing `toolsets` parameter. Each subagent inherits the parent's enabled toolsets so the model cannot grant a child capabilities that the parent does not have. Configure the parent's tools before starting the conversation if delegated work needs additional capabilities.
 
+### Read-only subagents: `mode="explore"`
+
+The model *can* narrow a child, because narrowing is always safe. `mode="explore"` restricts a subagent to side-effect-free tools — `read_file`, `search_files`, `web_search`, `web_extract`, `skills_list`, `skill_view`, `vision_analyze` — and nothing else. No writes, no shell, no scheduling, no messages, and no MCP tools (their effects can't be inspected, so they're dropped rather than trusted).
+
+```python
+delegate_task(
+    goal="Find every place the gateway retries a failed send, and how backoff is computed",
+    context="Start from gateway/run.py. Report file:line for each site.",
+    mode="explore",
+)
+```
+
+The restriction is applied twice: the child requests the `exploration` toolset, which is then **intersected with the parent's** exactly like any other request, and a deny list strips mutating bundles afterwards. So `explore` can only ever remove capability — a parent without file access still cannot produce a child that has it.
+
+:::tip Why this exists
+Exploration is where an agent spends most of its steps and nearly all of its context tokens — reading files, grepping, fetching pages — while needing the least judgement per step. It's also the only phase that is safe to replay or discard, since nothing it does has an effect. That makes it the natural piece to hand to a cheaper or local model via `delegation.base_url`, while the parent keeps the planning and all the editing.
+
+:::
+
+### Where the saving actually comes from
+
+The child explores in its **own** context, which is discarded when it finishes. The parent pays for the child's summary — not for the twenty files it opened. A forty-call exploration that would have grown the parent's context on every turn collapses into one distilled result.
+
+That saving evaporates if the child answers with a narrative of everything it did, so an `explore` child is given an output contract by default:
+
+```json
+{
+  "findings":       ["Retries are capped at 5 in gateway/run.py"],
+  "evidence":       ["gateway/run.py:412"],
+  "open_questions": ["Whether the cap is configurable at runtime"],
+  "examined":       ["gateway/config.py"]
+}
+```
+
+`evidence` is deliberately separate from `findings`: a distilled claim the parent cannot locate is worse than no claim, because checking it means redoing the exploration you just paid for.
+
+Supply your own `output_schema` and it wins — this is a default, not a policy.
+
 Certain tools are blocked for subagents even when the parent has them:
 - `delegate_task` — blocked for leaf subagents (the default). Retained for `role="orchestrator"` children, bounded by `max_spawn_depth` — see [Depth Limit and Nested Orchestration](#depth-limit-and-nested-orchestration) below.
 - `clarify` — subagents cannot interact with the user
@@ -360,7 +398,7 @@ For **durable execution** that must survive session closure or process restart, 
 ## Key Properties
 
 - Each subagent gets its **own terminal session** (separate from the parent)
-- Subagents inherit the parent's enabled toolsets; the model cannot select or widen them per call
+- Subagents inherit the parent's enabled toolsets; the model cannot widen them per call, but may narrow to read-only with `mode="explore"`
 - **Nested delegation is opt-in** — only `role="orchestrator"` children can delegate further, and only when `max_spawn_depth` is raised from its default of 1 (flat). Disable globally with `orchestrator_enabled: false`.
 - Leaf subagents **cannot** call: `delegate_task`, `clarify`, `memory`, `send_message`, `cronjob`. Orchestrator subagents retain `delegate_task` but keep the other blocks. Both roles retain `execute_code` (programmatic tool calling) so children can batch mechanical work instead of burning reasoning iterations.
 - **Cancellation follows ownership** — `/stop` or closing/resetting the owning session cancels its background children; synchronous descendants under orchestrators follow their parent's interrupt state

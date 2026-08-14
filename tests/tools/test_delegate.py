@@ -1750,3 +1750,206 @@ class TestFallbackModelInheritance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExploreMode(unittest.TestCase):
+    """mode="explore" narrows a child to side-effect-free tools.
+
+    The safety property under test is one-directional: explore may only ever
+    REMOVE capability. These assertions resolve the child's actual tool
+    definitions rather than trusting toolset names, because the toolset layer
+    expands composites and a name-level check would miss a mutating tool
+    arriving inside a bundle.
+    """
+
+    MUTATING = {
+        "write_file", "patch", "terminal", "process", "execute_code",
+        "computer_use", "image_generate", "text_to_speech", "memory",
+        "cronjob", "send_message", "delegate_task", "skill_manage",
+    }
+
+    def _child_tool_names(self, parent, mode, role="leaf"):
+        import model_tools
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            MockAgent.return_value = MagicMock()
+            _build_child_agent(
+                task_index=0,
+                goal="Investigate",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+                role=role,
+                mode=mode,
+            )
+        _, kwargs = MockAgent.call_args
+        definitions = model_tools.get_tool_definitions(
+            enabled_toolsets=kwargs["enabled_toolsets"],
+            disabled_toolsets=kwargs["disabled_toolsets"],
+            quiet_mode=True,
+            skip_tool_search_assembly=True,
+        )
+        return {d["function"]["name"] for d in definitions}
+
+    def test_explore_exposes_no_mutating_tool(self):
+        """The whole point: a full-capability parent yields a read-only child."""
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["hermes-cli"]
+        parent.disabled_toolsets = []
+        names = self._child_tool_names(parent, mode="explore")
+        leaked = names & self.MUTATING
+        self.assertEqual(leaked, set(), f"explore child gained mutating tools: {leaked}")
+
+    def test_explore_keeps_the_tools_exploration_needs(self):
+        """The child should get everything `exploration` can offer here.
+
+        Which tools resolve at all is environment-dependent -- web_search and
+        vision_analyze drop out without credentials -- so this compares against
+        what the toolset actually yields in this environment rather than
+        hard-coding a list that would fail on an unconfigured machine.
+        """
+        import model_tools
+
+        available = {
+            d["function"]["name"]
+            for d in model_tools.get_tool_definitions(
+                enabled_toolsets=["exploration"],
+                disabled_toolsets=[],
+                quiet_mode=True,
+                skip_tool_search_assembly=True,
+            )
+        }
+        # Sanity: the file tools need no credentials and must always be there,
+        # otherwise this test would pass vacuously on a broken resolver.
+        self.assertIn("read_file", available)
+        self.assertIn("search_files", available)
+
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["hermes-cli"]
+        parent.disabled_toolsets = []
+        names = self._child_tool_names(parent, mode="explore")
+        self.assertEqual(available - names, set())
+
+    def test_explore_cannot_widen_past_the_parent(self):
+        """Narrowing only. A parent without file access cannot spawn a child
+        that has it, even though `exploration` nominally includes read_file."""
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["web"]
+        parent.disabled_toolsets = []
+        names = self._child_tool_names(parent, mode="explore")
+        self.assertNotIn("read_file", names)
+        self.assertNotIn("write_file", names)
+
+    def test_default_mode_is_unchanged(self):
+        """Regression guard: omitting mode must behave exactly as before."""
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["hermes-cli"]
+        parent.disabled_toolsets = []
+        default_names = self._child_tool_names(parent, mode="default")
+        self.assertIn("terminal", default_names)
+        self.assertIn("write_file", default_names)
+        self.assertTrue(DELEGATE_BLOCKED_TOOLS.isdisjoint(default_names))
+
+    def test_explore_does_not_inherit_mcp_toolsets(self):
+        """MCP servers expose tools of unknown effect, so explore drops them."""
+        parent = _make_mock_parent()
+        parent.enabled_toolsets = ["hermes-cli", "mcp_github"]
+        parent.disabled_toolsets = []
+        with (
+            patch("run_agent.AIAgent") as MockAgent,
+            patch("tools.delegate_tool._is_mcp_toolset_name",
+                  side_effect=lambda n: str(n).startswith("mcp_")),
+        ):
+            MockAgent.return_value = MagicMock()
+            _build_child_agent(
+                task_index=0, goal="Investigate", context=None, toolsets=None,
+                model=None, max_iterations=10, parent_agent=parent,
+                task_count=1, role="leaf", mode="explore",
+            )
+        _, kwargs = MockAgent.call_args
+        self.assertNotIn("mcp_github", kwargs["enabled_toolsets"])
+
+    def test_unknown_mode_degrades_to_default(self):
+        from tools.delegate_tool import _normalize_mode
+
+        self.assertEqual(_normalize_mode(None), "default")
+        self.assertEqual(_normalize_mode(""), "default")
+        self.assertEqual(_normalize_mode("EXPLORE"), "explore")
+        self.assertEqual(_normalize_mode("  explore "), "explore")
+        self.assertEqual(_normalize_mode("nonsense"), "default")
+
+    def test_mode_is_exposed_to_the_model(self):
+        props = DELEGATE_TASK_SCHEMA["parameters"]["properties"]
+        self.assertEqual(set(props["mode"]["enum"]), {"default", "explore"})
+        per_task = props["tasks"]["items"]["properties"]["mode"]
+        self.assertEqual(set(per_task["enum"]), {"default", "explore"})
+
+
+class TestExploreDistillation(unittest.TestCase):
+    """mode="explore" gives the child an output contract by default.
+
+    The saving from an exploring child comes from its context being separate and
+    then thrown away — the parent pays for the summary, not for the files the
+    child opened. That saving disappears if the child replies with a narrative
+    of everything it did, so it is handed a shape to fill in.
+    """
+
+    def _schemas_for(self, tasks=None, **kw):
+        """Capture the per-task schema delegate_task resolves, without running."""
+        seen = {}
+        from tools import delegation_output_schema as dos
+        real = dos.coerce_output_schema
+
+        def spy(raw):
+            seen.setdefault("schemas", []).append(raw)
+            return real(raw)
+
+        parent = _make_mock_parent()
+        with (
+            patch("tools.delegation_output_schema.coerce_output_schema", side_effect=spy),
+            patch("tools.delegate_tool._build_child_preserving_parent_tools",
+                  side_effect=RuntimeError("stop before spawning")),
+        ):
+            try:
+                delegate_task(parent_agent=parent, tasks=tasks, **kw)
+            except Exception:
+                pass
+        return seen.get("schemas", [])
+
+    def test_explore_gets_the_distillation_contract(self):
+        from tools.delegate_tool import EXPLORE_OUTPUT_SCHEMA
+        schemas = self._schemas_for(goal="survey the retry paths", mode="explore")
+        self.assertTrue(schemas)
+        self.assertEqual(schemas[0], EXPLORE_OUTPUT_SCHEMA)
+
+    def test_default_mode_gets_no_contract(self):
+        schemas = self._schemas_for(goal="do the thing")
+        self.assertTrue(schemas)
+        self.assertIsNone(schemas[0], "a normal child must not gain a contract")
+
+    def test_explicit_schema_wins(self):
+        """A default, not a policy."""
+        mine = {"type": "object", "properties": {"answer": {"type": "string"}}}
+        schemas = self._schemas_for(goal="survey", mode="explore", output_schema=mine)
+        self.assertEqual(schemas[0], mine)
+
+    def test_per_task_mode_gets_the_contract(self):
+        from tools.delegate_tool import EXPLORE_OUTPUT_SCHEMA
+        schemas = self._schemas_for(tasks=[
+            {"goal": "survey the retry paths in the gateway", "mode": "explore"},
+            {"goal": "edit the retry backoff constant in run.py"},
+        ])
+        self.assertEqual(schemas[0], EXPLORE_OUTPUT_SCHEMA)
+        self.assertIsNone(schemas[1], "only the explore task gets a contract")
+
+    def test_contract_demands_locatable_evidence(self):
+        """A distilled claim the parent cannot locate is worse than no claim —
+        it cannot be checked without redoing the exploration just paid for."""
+        from tools.delegate_tool import EXPLORE_OUTPUT_SCHEMA as E
+        self.assertIn("findings", E["required"])
+        for field in ("findings", "evidence", "open_questions", "examined"):
+            self.assertIn(field, E["properties"])
+        self.assertIn("file:line", E["properties"]["evidence"]["description"])

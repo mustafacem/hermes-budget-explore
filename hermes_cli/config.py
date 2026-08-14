@@ -1857,6 +1857,8 @@ _EXTRA_KNOWN_ROOT_KEYS = {
     "mcp_servers",       # MCP server definitions written by setup/tools flows
     # Roots read from the raw user YAML (or written by our own flows) that are
     # intentionally absent from DEFAULT_CONFIG:
+    "budget",            # per-session spend ceiling read by the budget-guard plugin
+    "watchdog",          # loop/no-progress thresholds read by the agent-watchdog plugin
     "image_gen",         # image-generation provider config (agent/image_gen_registry.py)
     "video_gen",         # video-generation provider config (agent/video_gen_registry.py)
     "plugins",           # plugin enable/disable lists (hermes_cli/plugins_cmd.py)

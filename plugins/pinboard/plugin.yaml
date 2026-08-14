@@ -1,0 +1,9 @@
+name: pinboard
+version: 1.0.0
+description: "Findings that survive context compaction. The agent pins the few facts it would hate to re-derive; they are stored outside the transcript and re-injected each turn, so compaction has nothing to eat and a resumed session still has them."
+author: NousResearch
+provides_tools:
+  - pin
+hooks:
+  - pre_llm_call
+  - on_session_start

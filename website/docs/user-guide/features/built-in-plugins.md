@@ -55,6 +55,9 @@ The repo ships these bundled plugins under `plugins/`. All are opt-in — enable
 
 | Plugin | Kind | Purpose |
 |---|---|---|
+| `pinboard` | tool + hooks | Findings that survive context compaction — the agent pins key conclusions, which are stored outside the transcript and re-injected each turn, so compaction can't drop them and a resumed session still has them |
+| `agent-watchdog` | hooks | Detects loops and no-progress churn across every tool — same call with the same result, A-B-A-B cycles, long runs yielding nothing new — and interrupts once with actionable advice |
+| `budget-guard` | hooks + slash command | Hard spend ceiling per session — warns at 75%, denies delegation at 90%, denies all tools at 100%, so a runaway agent lands instead of crashing. Falls back to a token ceiling on subscription routes where cost is unknowable. `/spend` attributes context cost per tool, amortised over re-transmission |
 | `disk-cleanup` | hooks + slash command | Auto-track ephemeral files and clean them on session end |
 | `security-guidance` | hooks | Pattern-match dangerous code on `write_file`/`patch` and append a security warning (or block) — 25 rules (Apache-2.0 fork of Anthropic's `claude-plugins-official` patterns) |
 | `observability/langfuse` | hooks | Trace turns / LLM calls / tools to [Langfuse](https://langfuse.com) |
