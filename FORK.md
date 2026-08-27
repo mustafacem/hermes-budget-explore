@@ -5,7 +5,7 @@ Forked at commit [`e9579a989`](https://github.com/NousResearch/hermes-agent/comm
 
 Everything in this repository that is not listed below is upstream work by Nous
 Research, unmodified. `LICENSE` is unchanged and still applies. This fork adds
-four features and does not remove any.
+five features and does not remove any.
 
 ---
 
@@ -19,14 +19,24 @@ four features and does not remove any.
 | 4 | `agent-watchdog` — detects repeat / cycle / churn loops | `plugins/agent-watchdog/` |
 | 5 | `pinboard` — findings that survive context compaction | `plugins/pinboard/` |
 
+One upstream file is changed for a reason unrelated to the features:
+`.github/workflows/install-e2e.yml` now runs its scheduled legs only on
+`NousResearch/hermes-agent`. That workflow checks that a user on a released
+version can update to the current commit, which is a claim about upstream's
+distribution channel — releases tagged on the upstream repo, `install.sh` served
+from `hermes-agent.nousresearch.com`. This fork owns neither and has no release
+tags, so the tag picker exited non-zero and the workflow reported failure twice a
+day without ever having tested anything. `workflow_dispatch` still runs it.
+
 **Nothing is enabled by default.** The plugins are opt-in via `plugins.enabled`,
 and `mode="explore"` is a parameter the model chooses. Core changes total **two
 lines**, both config-root registrations in `hermes_cli/config.py`; everything else
 is new files on the public plugin surface.
 
 ```
- 3,116 lines added across 23 files
-   428 lines modified in 6 upstream files
+ 4,119 insertions, 4 deletions, across 26 files vs the fork point
+    18 new files (5 plugins + their tests and READMEs, FORK.md, HANDOFF.md)
+     8 upstream files touched, 2 of them core (both config-root registrations)
    169 tests added, all passing
 ```
 

@@ -58,6 +58,20 @@ jobs:
   # by both route matrices, so the two routes cover the same set.
   pick-releases:
     name: Pick release tags
+    # Forks do not run this on a schedule. The job proves that a user on a
+    # released version can reach this commit, which is a claim about upstream's
+    # distribution channel: releases tagged on NousResearch/hermes-agent, and
+    # install.sh served from hermes-agent.nousresearch.com. A fork owns neither
+    # and carries no release tags of its own, so pick-release-tags.sh correctly
+    # exits non-zero and the whole workflow reports failure twice a day without
+    # ever having had anything to test.
+    #
+    # workflow_dispatch is deliberately still allowed: if a fork does tag its
+    # own releases, running this by hand is exactly the right way to check the
+    # updater, and the tag picker's error is clear if there are none.
+    if: >-
+      github.repository == 'NousResearch/hermes-agent'
+      || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

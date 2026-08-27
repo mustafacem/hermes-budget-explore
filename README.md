@@ -6,7 +6,7 @@
 >
 > **This fork adds five opt-in features** — read-only exploring subagents, a session
 > spend ceiling, per-tool cost attribution, a stuck-loop detector, and pins that
-> survive compaction — in **3,116 new lines across 23 files**, with **169 new tests**
+> survive compaction — in **4,119 insertions across 26 files**, with **169 new tests**
 > and **zero new failures**. Core changes total **two lines**.
 >
 > Measured: **52–75% context saving** on multi-turn exploration, and a **19x** cost
