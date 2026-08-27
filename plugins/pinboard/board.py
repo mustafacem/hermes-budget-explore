@@ -78,7 +78,7 @@ class Board:
         path = self._path(session)
         if path and path.exists():
             try:
-                raw = json.loads(path.read_text("utf-8"))
+                raw = json.loads(path.read_text(encoding="utf-8"))
                 pins = [Pin(**p) for p in raw][:MAX_PINS]
             except Exception:
                 pins = []
@@ -91,7 +91,7 @@ class Board:
             return
         try:
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps([asdict(p) for p in pins]), "utf-8")
+            tmp.write_text(json.dumps([asdict(p) for p in pins]), encoding="utf-8")
             tmp.replace(path)
         except OSError:
             pass

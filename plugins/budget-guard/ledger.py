@@ -93,7 +93,7 @@ class Ledger:
         path = self._path(key)
         if path and path.exists():
             try:
-                raw = json.loads(path.read_text("utf-8"))
+                raw = json.loads(path.read_text(encoding="utf-8"))
                 spend.cost_usd = float(raw.get("cost_usd", 0.0) or 0.0)
                 spend.tokens = int(raw.get("tokens", 0) or 0)
                 spend.api_calls = int(raw.get("api_calls", 0) or 0)
@@ -114,7 +114,7 @@ class Ledger:
                 "cost_usd": spend.cost_usd, "tokens": spend.tokens,
                 "api_calls": spend.api_calls, "has_cost_data": spend.has_cost_data,
                 "announced": sorted(spend.announced),
-            }), "utf-8")
+            }), encoding="utf-8")
             tmp.replace(path)
         except OSError:
             pass
