@@ -19,14 +19,17 @@ five features and does not remove any.
 | 4 | `agent-watchdog` — detects repeat / cycle / churn loops | `plugins/agent-watchdog/` |
 | 5 | `pinboard` — findings that survive context compaction | `plugins/pinboard/` |
 
-One upstream file is changed for a reason unrelated to the features:
-`.github/workflows/install-e2e.yml` now runs its scheduled legs only on
-`NousResearch/hermes-agent`. That workflow checks that a user on a released
-version can update to the current commit, which is a claim about upstream's
-distribution channel — releases tagged on the upstream repo, `install.sh` served
-from `hermes-agent.nousresearch.com`. This fork owns neither and has no release
-tags, so the tag picker exited non-zero and the workflow reported failure twice a
-day without ever having tested anything. `workflow_dispatch` still runs it.
+One upstream file is changed for a reason unrelated to the features.
+`.github/workflows/install-e2e.yml` asks whether a user on a released version can
+update to the current commit — it samples the repo's release tags and updates
+from each. A repository with no releases has nothing to update *from*, which is
+the normal state of a fork (git does not push tags by default) and of upstream
+before its first release. It was failing twice a day here over a claim this repo
+cannot make. The tag step now treats an empty tag list as an empty matrix rather
+than an error, and the route jobs skip. `scripts/sandbox/pick-release-tags.sh`
+is untouched and still exits non-zero, which is correct for callers that have
+not fetched tags — the workflow can tell the two cases apart because it
+configures the checkout, and the script cannot.
 
 **Nothing is enabled by default.** The plugins are opt-in via `plugins.enabled`,
 and `mode="explore"` is a parameter the model chooses. Core changes total **two

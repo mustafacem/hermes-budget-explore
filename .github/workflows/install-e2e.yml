@@ -58,20 +58,6 @@ jobs:
   # by both route matrices, so the two routes cover the same set.
   pick-releases:
     name: Pick release tags
-    # Forks do not run this on a schedule. The job proves that a user on a
-    # released version can reach this commit, which is a claim about upstream's
-    # distribution channel: releases tagged on NousResearch/hermes-agent, and
-    # install.sh served from hermes-agent.nousresearch.com. A fork owns neither
-    # and carries no release tags of its own, so pick-release-tags.sh correctly
-    # exits non-zero and the whole workflow reports failure twice a day without
-    # ever having had anything to test.
-    #
-    # workflow_dispatch is deliberately still allowed: if a fork does tag its
-    # own releases, running this by hand is exactly the right way to check the
-    # updater, and the tag picker's error is clear if there are none.
-    if: >-
-      github.repository == 'NousResearch/hermes-agent'
-      || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -89,13 +75,33 @@ jobs:
       - id: pick
         run: |
           set -euo pipefail
+          # The checkout above fetches tags, so an empty list here means this
+          # repository has no releases -- it does NOT mean the clone was
+          # shallow, which is the case pick-release-tags.sh exits non-zero on.
+          # Distinguishing them is only possible here, where the checkout is
+          # configured; the script keeps its strictness for callers that have
+          # not fetched tags.
+          #
+          # A repository with no releases has nothing to update FROM, so the
+          # honest result is an empty matrix, not a failure. This is the normal
+          # state of a fork (git does not push tags by default) and of upstream
+          # before its first release. Failing there would report a broken
+          # updater twice a day over a claim the repository cannot make.
+          if [ -z "$(git tag --list 'v*')" ]; then
+            echo "No release tags in ${{ github.repository }} -- nothing to update from."
+            echo "Skipping the route matrices; this is not a failure."
+            echo 'tags=[]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
   # `hermes update` -- the route most users take.
   update:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'installer'
+    if: >-
+      needs.pick-releases.outputs.tags != '[]'
+      && (github.event_name != 'workflow_dispatch' || inputs.route != 'installer')
     needs: pick-releases
     strategy:
       # One release breaking is worth knowing about even if another already
@@ -111,7 +117,9 @@ jobs:
   # Re-running the curl one-liner over an existing checkout: autostash + pull
   # rather than the updater's own git handling.
   installer:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'update'
+    if: >-
+      needs.pick-releases.outputs.tags != '[]'
+      && (github.event_name != 'workflow_dispatch' || inputs.route != 'update')
     needs: pick-releases
     strategy:
       fail-fast: false
