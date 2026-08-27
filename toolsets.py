@@ -258,7 +258,15 @@ TOOLSETS = {
             "skills_list", "skill_view",
             "vision_analyze",
         ],
-        "includes": []
+        "includes": [],
+        # Posture toolset, for the same reason `coding` is one: this is a
+        # per-delegation selection made by delegate_task(mode="explore"), not a
+        # per-platform capability a user enables or a permanent disable they
+        # configure. Without this flag, Blank Slate enumerates it into
+        # agent.disabled_toolsets, and because disables are applied at *tool*
+        # granularity, the read_file and search_files it shares with the kept
+        # `file` toolset get stripped from the minimal agent (#57315, #58281).
+        "posture": True,
     },
 
 

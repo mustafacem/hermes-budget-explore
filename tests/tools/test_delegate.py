@@ -1953,3 +1953,41 @@ class TestExploreDistillation(unittest.TestCase):
         for field in ("findings", "evidence", "open_questions", "examined"):
             self.assertIn(field, E["properties"])
         self.assertIn("file:line", E["properties"]["evidence"]["description"])
+
+
+class TestExplorationToolsetIsPosture:
+    """`exploration` must never reach agent.disabled_toolsets.
+
+    Disables are applied at *tool* granularity, so any disabled toolset that
+    shares a tool with a kept one silently strips it (#57315, #58281).
+    `exploration` deliberately overlaps `file` on read_file/search_files, which
+    makes it exactly the shape that invariant is about. It avoids the problem by
+    being a posture toolset -- a per-delegation selection, like `coding` is a
+    per-session one -- not by keeping its tools disjoint.
+    """
+
+    def test_exploration_is_marked_posture(self):
+        from toolsets import TOOLSETS
+        assert TOOLSETS["exploration"].get("posture") is True
+
+    def test_exploration_overlaps_file_and_so_needs_the_flag(self):
+        # If this ever stops overlapping, the posture flag is no longer what is
+        # protecting Blank Slate, and this test should be revisited rather than
+        # deleted -- the overlap is the reason the flag is load-bearing.
+        from toolsets import resolve_toolset
+        overlap = set(resolve_toolset("exploration")) & set(resolve_toolset("file"))
+        assert overlap, "expected exploration to share tools with file"
+
+    def test_blank_slate_keeps_its_minimal_surface(self):
+        from hermes_cli.setup import _blank_slate_minimal_toolsets
+        from toolsets import resolve_toolset
+        cfg = {}
+        _blank_slate_minimal_toolsets(cfg)
+        assert "exploration" not in cfg["agent"]["disabled_toolsets"]
+        kept = set()
+        for ts in cfg["platform_toolsets"]["cli"]:
+            kept.update(resolve_toolset(ts))
+        for ts in cfg["agent"]["disabled_toolsets"]:
+            assert not (set(resolve_toolset(ts)) & kept), (
+                f"disabled toolset {ts!r} would strip kept tools"
+            )
